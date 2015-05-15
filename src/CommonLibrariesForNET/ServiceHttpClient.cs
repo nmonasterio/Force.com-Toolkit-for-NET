@@ -260,5 +260,52 @@ namespace Salesforce.Common
             var errorResponse = JsonConvert.DeserializeObject<ErrorResponses>(response);
             throw new ForceException(errorResponse[0].ErrorCode, errorResponse[0].Message);
         }
+
+        public async Task<T> HttpBinaryDataPostAsync<T>(string urlSuffix, object inputObject, byte[] fileContents, string headerName, string fileName)
+        {
+            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
+
+            var request = new HttpRequestMessage
+            {
+                RequestUri = new Uri(url),
+                Method = HttpMethod.Post,
+                
+            };
+
+            var json = JsonConvert.SerializeObject(inputObject,
+                Formatting.None,
+                new JsonSerializerSettings
+                {
+                    NullValueHandling = NullValueHandling.Ignore,
+                });
+
+            
+
+            MultipartFormDataContent content = new MultipartFormDataContent();
+
+            var stringContent = new StringContent(json, Encoding.UTF8, "application/json");
+            stringContent.Headers.Add("Content-Disposition", "form-data; name=\"json\"");
+            content.Add(stringContent);
+
+
+            ByteArrayContent byteArrayContent = new ByteArrayContent(fileContents);
+            byteArrayContent.Headers.Add("Content-Type", "application/octet-stream");
+            byteArrayContent.Headers.Add("Content-Disposition", String.Format("form-data; name=\"{0}\"; filename=\"{1}\"", headerName, fileName));
+            content.Add(byteArrayContent, headerName, fileName);
+
+            var responseMessage = await _httpClient.PostAsync(new Uri(url), content).ConfigureAwait(false);
+            var response = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
+
+            if (responseMessage.IsSuccessStatusCode)
+            {
+                var r = JsonConvert.DeserializeObject<T>(response);
+                return r;
+            }
+
+            var errorResponse = JsonConvert.DeserializeObject<ErrorResponses>(response);
+            throw new ForceException(errorResponse[0].ErrorCode, errorResponse[0].Message);
+
+
+        }
     }
 }
