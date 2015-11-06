@@ -15,17 +15,18 @@ namespace Salesforce.Common
     public class ServiceHttpClient : IServiceHttpClient, IDisposable
     {
         private const string UserAgent = "forcedotcom-toolkit-dotnet";
+        private const string DateFormat = "s";
         private readonly string _instanceUrl;
-        private readonly string _apiVersion;
+        public string ApiVersion;
         private readonly HttpClient _httpClient;
 
         public ServiceHttpClient(string instanceUrl, string apiVersion, string accessToken, HttpClient httpClient)
         {
             _instanceUrl = instanceUrl;
-            _apiVersion = apiVersion;
+            ApiVersion = apiVersion;
             _httpClient = httpClient;
 
-            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(string.Concat(UserAgent, "/", _apiVersion));
+            _httpClient.DefaultRequestHeaders.UserAgent.ParseAdd(string.Concat(UserAgent, "/", ApiVersion));
             _httpClient.DefaultRequestHeaders.Authorization = new AuthenticationHeaderValue("Bearer", accessToken);
 
             _httpClient.DefaultRequestHeaders.Accept.Clear();
@@ -39,11 +40,11 @@ namespace Salesforce.Common
 
         public async Task<T> HttpGetAsync<T>(string urlSuffix)
         {
-            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
+            var uri = Common.FormatUrl(urlSuffix, _instanceUrl, ApiVersion);
 
             var request = new HttpRequestMessage
             {
-                RequestUri = new Uri(url),
+                RequestUri = uri,
                 Method = HttpMethod.Get
             };
 
@@ -73,38 +74,31 @@ namespace Salesforce.Common
             throw new ForceException(errorResponse[0].ErrorCode, errorResponse[0].Message);
         }
 
-		/// <summary>
-        /// Call a custom REST API
-        /// </summary>
-        /// <typeparam name="T"></typeparam>
-        /// <param name="apiName">The name of the custom REST API</param>
-        /// <param name="parameters">Pre-formatted parameters like this: ?name1=value1&name2=value2&soon=soforth</param>
-        /// <returns></returns>
-        public async Task<T> HttpGetRestApiAsync<T>(string apiName, string parameters)
+        public async Task<T> HttpGetRestApiAsync<T>(string apiName)
         {
-            var url = Common.FormatCustomUrl(apiName, parameters, _instanceUrl);
+            var url = Common.FormatRestApiUrl(apiName, _instanceUrl);
 
             return await HttpGetAsync<T>(url);
         }
-        
-		public async Task<IList<T>> HttpGetAsync<T>(string urlSuffix, string nodeName)
+
+        public async Task<IList<T>> HttpGetAsync<T>(string urlSuffix, string nodeName)
         {
             string next = null;
             string response = null;
             var records = new List<T>();
 
-            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
+            var uri = Common.FormatUrl(urlSuffix, _instanceUrl, ApiVersion);
 
             try
             {
                 do
                 {
                     if (next != null)
-                        url = Common.FormatUrl(string.Format("query/{0}", next.Split('/').Last()), _instanceUrl, _apiVersion);
+                        uri = Common.FormatUrl(string.Format("query/{0}", next.Split('/').Last()), _instanceUrl, ApiVersion);
 
                     var request = new HttpRequestMessage
                     {
-                        RequestUri = new Uri(url),
+                        RequestUri = uri,
                         Method = HttpMethod.Get
                     };
 
@@ -151,20 +145,47 @@ namespace Salesforce.Common
             throw new ForceException(errorResponse[0].ErrorCode, errorResponse[0].Message);
         }
 
+        public async Task<T> HttpPostRestApiAsync<T>(string apiName, object inputObject)
+        {
+            var url = Common.FormatRestApiUrl(apiName, _instanceUrl);
+
+            return await HttpPostAsync<T>(inputObject, url);
+        }
         public async Task<T> HttpPostAsync<T>(object inputObject, string urlSuffix)
         {
-            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
+            return await HttpPostAsync<T>(inputObject, urlSuffix, null);
+        }
+
+        public async Task<T> HttpPostAsync<T>(object inputObject, string urlSuffix, Dictionary<string, string> headers)
+        {
+            var uri = Common.FormatUrl(urlSuffix, _instanceUrl, ApiVersion);
             var json = JsonConvert.SerializeObject(inputObject,
                 Formatting.None,
                 new JsonSerializerSettings
                 {
                     NullValueHandling = NullValueHandling.Ignore,
-                    ContractResolver = new CreateableContractResolver()
+                    ContractResolver = new CreateableContractResolver(),
+                    DateFormatString = DateFormat
                 });
+
+
+            var request = new HttpRequestMessage
+            {
+                RequestUri = uri,
+                Method = new HttpMethod("POST")
+            };
+
+            if (headers != null)
+            {
+                foreach (var h in headers)
+                {
+                    request.Headers.Add(h.Key, h.Value);
+                }
+            }
 
             var content = new StringContent(json, Encoding.UTF8, "application/json");
 
-            var responseMessage = await _httpClient.PostAsync(new Uri(url), content).ConfigureAwait(false);
+            var responseMessage = await _httpClient.SendAsync(request).ConfigureAwait(false);
             var response = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             if (responseMessage.IsSuccessStatusCode)
@@ -179,15 +200,35 @@ namespace Salesforce.Common
 
         public async Task<T> HttpPostAsync<T>(object inputObject, Uri uri)
         {
+            return await HttpPostAsync<T>(inputObject, uri, null);
+        }
+
+        public async Task<T> HttpPostAsync<T>(object inputObject, Uri uri, Dictionary<string, string> headers)
+        {
             var json = JsonConvert.SerializeObject(inputObject,
                 Formatting.None,
                 new JsonSerializerSettings
                 {
                     NullValueHandling = NullValueHandling.Ignore,
+                    DateFormatString = DateFormat
                 });
 
+            var request = new HttpRequestMessage
+            {
+                RequestUri = uri,
+                Method = new HttpMethod("POST")
+            };
+
+            if (headers != null)
+            {
+                foreach (var h in headers)
+                {
+                    request.Headers.Add(h.Key, h.Value);
+                }
+            }
+
             var content = new StringContent(json, Encoding.UTF8, "application/json");
-            var responseMessage = await _httpClient.PostAsync(uri, content).ConfigureAwait(false);
+            var responseMessage = await _httpClient.SendAsync(request).ConfigureAwait(false);
             var response = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             if (responseMessage.IsSuccessStatusCode)
@@ -202,27 +243,44 @@ namespace Salesforce.Common
 
         public async Task<SuccessResponse> HttpPatchAsync(object inputObject, string urlSuffix)
         {
-            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
+            return await HttpPatchAsync(inputObject, urlSuffix, null);
+        }
+
+
+        public async Task<SuccessResponse> HttpPatchAsync(object inputObject, string urlSuffix, Dictionary<string, string> headers)
+        {
+            var uri = Common.FormatUrl(urlSuffix, _instanceUrl, ApiVersion);
 
             var request = new HttpRequestMessage
             {
-                RequestUri = new Uri(url),
+                RequestUri = uri,
                 Method = new HttpMethod("PATCH")
             };
+
+            if (headers != null)
+            {
+                foreach (var h in headers)
+                {
+                    request.Headers.Add(h.Key, h.Value);
+                }
+            }
 
             var json = JsonConvert.SerializeObject(inputObject,
                 Formatting.None,
                 new JsonSerializerSettings
                 {
-                    ContractResolver = new UpdateableContractResolver()
+                    ContractResolver = new UpdateableContractResolver(),
+                    DateFormatString = DateFormat
                 });
 
             request.Content = new StringContent(json, Encoding.UTF8, "application/json");
 
             var responseMessage = await _httpClient.SendAsync(request).ConfigureAwait(false);
 
-            if (responseMessage.IsSuccessStatusCode) {
-                if (responseMessage.StatusCode != System.Net.HttpStatusCode.NoContent) {
+            if (responseMessage.IsSuccessStatusCode)
+            {
+                if (responseMessage.StatusCode != System.Net.HttpStatusCode.NoContent)
+                {
                     var response = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
 
                     var r = JsonConvert.DeserializeObject<SuccessResponse>(response);
@@ -240,11 +298,11 @@ namespace Salesforce.Common
 
         public async Task<bool> HttpDeleteAsync(string urlSuffix)
         {
-            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
+            var uri = Common.FormatUrl(urlSuffix, _instanceUrl, ApiVersion);
 
             var request = new HttpRequestMessage
             {
-                RequestUri = new Uri(url),
+                RequestUri = uri,
                 Method = HttpMethod.Delete
             };
 
@@ -263,14 +321,7 @@ namespace Salesforce.Common
 
         public async Task<T> HttpBinaryDataPostAsync<T>(string urlSuffix, object inputObject, byte[] fileContents, string headerName, string fileName)
         {
-            var url = Common.FormatUrl(urlSuffix, _instanceUrl, _apiVersion);
-
-            var request = new HttpRequestMessage
-            {
-                RequestUri = new Uri(url),
-                Method = HttpMethod.Post,
-                
-            };
+            var uri = Common.FormatUrl(urlSuffix, _instanceUrl, ApiVersion);
 
             var json = JsonConvert.SerializeObject(inputObject,
                 Formatting.None,
@@ -279,21 +330,18 @@ namespace Salesforce.Common
                     NullValueHandling = NullValueHandling.Ignore,
                 });
 
-            
-
-            MultipartFormDataContent content = new MultipartFormDataContent();
+            var content = new MultipartFormDataContent();
 
             var stringContent = new StringContent(json, Encoding.UTF8, "application/json");
             stringContent.Headers.Add("Content-Disposition", "form-data; name=\"json\"");
             content.Add(stringContent);
 
-
-            ByteArrayContent byteArrayContent = new ByteArrayContent(fileContents);
+            var byteArrayContent = new ByteArrayContent(fileContents);
             byteArrayContent.Headers.Add("Content-Type", "application/octet-stream");
             byteArrayContent.Headers.Add("Content-Disposition", String.Format("form-data; name=\"{0}\"; filename=\"{1}\"", headerName, fileName));
             content.Add(byteArrayContent, headerName, fileName);
 
-            var responseMessage = await _httpClient.PostAsync(new Uri(url), content).ConfigureAwait(false);
+            var responseMessage = await _httpClient.PostAsync(uri, content).ConfigureAwait(false);
             var response = await responseMessage.Content.ReadAsStringAsync().ConfigureAwait(false);
 
             if (responseMessage.IsSuccessStatusCode)
@@ -304,8 +352,6 @@ namespace Salesforce.Common
 
             var errorResponse = JsonConvert.DeserializeObject<ErrorResponses>(response);
             throw new ForceException(errorResponse[0].ErrorCode, errorResponse[0].Message);
-
-
         }
     }
 }
